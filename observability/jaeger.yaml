@@ -24,6 +24,7 @@ spec:
           ports:
             - containerPort: 16686
             - containerPort: 4318
+            - containerPort: 14269
           env:
             - name: COLLECTOR_OTLP_ENABLED
               value: "true"
@@ -43,4 +44,7 @@ spec:
     - name: otlp-http
       port: 4318
       targetPort: 4318
+    - name: metrics
+      port: 14269
+      targetPort: 14269
   type: ClusterIP
