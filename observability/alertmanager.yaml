@@ -19,12 +19,10 @@ data:
             send_resolved: true
             title: "{{ .CommonLabels.alertname }}"
             text: |
-              [ALERT] *Alert: {{ .CommonLabels.alertname }}*
-
-              *Project:* GitOps Kubernetes CI/CD & Observability
-              *Service:* {{ .CommonLabels.service }}
-              *Severity:* {{ .CommonLabels.severity }}
+              *Alert:* {{ .CommonLabels.alertname }}
               *Status:* {{ .Status }}
+              *Severity:* {{ .CommonLabels.severity }}
+              *Service:* {{ .CommonLabels.service }}
 
               *Summary:* {{ .CommonAnnotations.summary }}
               *Description:* {{ .CommonAnnotations.description }}
@@ -78,5 +76,7 @@ spec:
     - port: 9093
       targetPort: 9093
   type: ClusterIP
+
+
 
 
