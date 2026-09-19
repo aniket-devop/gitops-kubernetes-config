@@ -32,6 +32,12 @@ spec:
               value: "http://prometheus.observability.svc.cluster.local:9090"
             - name: COLLECTOR_OTLP_ENABLED
               value: "true"
+            - name: PROMETHEUS_QUERY_SUPPORT_SPANMETRICS_CONNECTOR
+              value: "true"
+            - name: PROMETHEUS_QUERY_NAMESPACE
+              value: "traces.span.metrics"
+            - name: PROMETHEUS_QUERY_DURATION_UNIT
+              value: "ms"
 ---
 apiVersion: v1
 kind: Service
