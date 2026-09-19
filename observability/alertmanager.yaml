@@ -18,6 +18,7 @@ data:
             channel: "#alerts"
             send_resolved: true
             title: "{{ .CommonLabels.alertname }}"
+            title_link: ""
             text: |
               *Alert:* {{ .CommonLabels.alertname }}
               *Status:* {{ .Status }}
@@ -76,6 +77,8 @@ spec:
     - port: 9093
       targetPort: 9093
   type: ClusterIP
+
+
 
 
 
