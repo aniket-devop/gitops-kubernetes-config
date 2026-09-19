@@ -25,7 +25,7 @@ data:
       - name: gitops-demo-alerts
         rules:
           - alert: HighErrorRate
-            expr: (sum(rate(traces_span_metrics_calls_total{service_name="gitops-demo-app",span_kind="SPAN_KIND_SERVER",http_status_code=~"5.."}[5m])) or vector(0)) / sum(rate(traces_span_metrics_calls_total{service_name="gitops-demo-app",span_kind="SPAN_KIND_SERVER"}[5m])) > 500.05
+            expr: (sum(rate(traces_span_metrics_calls_total{service_name="gitops-demo-app",span_kind="SPAN_KIND_SERVER",http_status_code=~"5.."}[5m])) or vector(0)) / sum(rate(traces_span_metrics_calls_total{service_name="gitops-demo-app",span_kind="SPAN_KIND_SERVER"}[5m])) > 0.05
             for: 2m
             labels:
               severity: critical
@@ -39,7 +39,7 @@ data:
             annotations:
               summary: "p95 latency above 500ms on gitops-demo-app"
           - alert: ServiceUnavailable
-            expr: absent(rate(traces_span_metrics_calls_total{service_name="gitops-demo-app",span_kind="SPAN_KIND_SERVER"}[5m]) > 500)
+            expr: absent(rate(traces_span_metrics_calls_total{service_name="gitops-demo-app",span_kind="SPAN_KIND_SERVER"}[5m]) > 0)
             for: 2m
             labels:
               severity: critical
