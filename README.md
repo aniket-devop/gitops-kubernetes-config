@@ -1,4 +1,4 @@
-# GitOps CI/CD Pipeline — FastAPI, ArgoCD, and Kind Kubernetes
+﻿# GitOps CI/CD Pipeline — FastAPI, ArgoCD, and Kind Kubernetes
 
 A FastAPI service that's tested, scanned, and published by GitHub Actions, then deployed and reconciled by ArgoCD onto a local Kind cluster — with rollback done entirely through Git.
 
@@ -90,6 +90,10 @@ Traces for `gitops-demo-app` in Jaeger's Search view — each `GET /health` requ
 A single trace's span waterfall — the parent `SERVER` span and its two ASGI child spans, with exact per-span duration.
 
 **Prometheus** scrapes Jaeger's internal metrics endpoint (`14269`) every 15 seconds. Jaeger is configured with `METRICS_STORAGE_TYPE=prometheus` and `PROMETHEUS_SERVER_URL` pointing back at it, wiring up the data source for Jaeger's "Monitor" tab.
+
+![Prometheus Target Up](screenshots/prometheus-target-up.png)
+
+Prometheus's own Targets page showing the `jaeger` scrape target in state `UP` — confirmation that metrics are actually flowing, not just that the config was written.
 
 **Why a separate namespace and `Application`:** keeping `observability` on its own ArgoCD `Application` means Jaeger and Prometheus reconcile independently of the app — a change to one doesn't trigger a sync of the other, and either can be deleted/recreated from Git without touching the application deployment.
 
