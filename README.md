@@ -8,7 +8,7 @@ A FastAPI service that's tested, scanned, and published by GitHub Actions, then 
 
 I designed, built, and validated this GitOps pipeline end-to-end. It's split across two repositories on purpose: [`gitops-ci-pipeline`](https://github.com/aniket-devop/gitops-ci-pipeline) owns the application and CI, and [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config) (this repo) owns the desired cluster state that ArgoCD reconciles against.
 
-**Stack:** FastAPI · pytest · Docker (non-root, `python:3.12-alpine`) · Trivy · GHCR · Helm · ArgoCD · Kind · OpenTelemetry · Jaeger · Prometheus.
+**Stack:** FastAPI · pytest · Docker (non-root, `python:3.12-alpine`) · Trivy · GHCR · Helm · ArgoCD · Kind · OpenTelemetry Collector (spanmetrics) · Jaeger · Prometheus · Grafana · Alertmanager · Slack.
 
 This runs on a **local Kind cluster**, not a managed cloud environment. It's a hands-on demonstration of the GitOps pattern, and I'm not presenting it as production-ready — no production traffic, uptime, or scale claims are made anywhere below.
 
@@ -97,27 +97,60 @@ Prometheus's own Targets page showing the `jaeger` scrape target in state `UP` �
 
 **Why a separate namespace and `Application`:** keeping `observability` on its own ArgoCD `Application` means Jaeger and Prometheus reconcile independently of the app — a change to one doesn't trigger a sync of the other, and either can be deleted/recreated from Git without touching the application deployment.
 
-**Not yet implemented:** the Monitor tab's RED-metrics dashboard (per-operation latency, error rate, request rate) additionally needs an OpenTelemetry Collector with a `spanmetrics` connector sitting between the app and Jaeger, to convert spans into metrics — Jaeger doesn't generate these itself. The trace pipeline (Search tab) and the Prometheus scrape connection are both confirmed working; the Collector is a scoped follow-up, not yet built.
+**RED metrics via an OpenTelemetry Collector.** The app no longer sends traces directly to Jaeger — it sends OTLP/HTTP to an `otel-collector` Deployment (`otel/opentelemetry-collector-contrib`), which does two things with every span: forwards it unchanged to Jaeger (so the trace pipeline above is untouched), and feeds it through a `spanmetrics` connector, which derives Request-rate, Error-rate, and Duration metrics per operation and exposes them on its own Prometheus-exporter endpoint (`8889`). Prometheus scrapes that endpoint alongside Jaeger's own metrics port.
+
+The connector's real metric names (`traces_span_metrics_calls_total`, `traces_span_metrics_duration_milliseconds_bucket`) were read directly off its `/metrics` endpoint rather than assumed from documentation — the first working version used a guessed namespace (`traces.span.metrics`, with dots) that Prometheus's query parser rejected outright; the fix was switching to the connector's actual underscore-delimited namespace.
+
+![Grafana RED Metrics Dashboard](screenshots/grafana-red-metrics-dashboard.png)
+
+Grafana (also GitOps-managed — datasource and dashboard are both provisioned from ConfigMaps, not clicked together by hand) reading the same Collector-derived metrics: Request Rate, Error Rate, and P95 Latency for `gitops-demo-app`.
+
+![Jaeger Monitor Tab](screenshots/jaeger-monitor-red-metrics.png)
+
+Jaeger's own "Monitor" tab, driven by the same Prometheus data — per-operation latency percentiles, error rate, and request rate, with no separate instrumentation beyond what the Collector already produces.
+
+**Alerting.** Prometheus evaluates three rules against the Collector's metrics — `HighErrorRate` (>5% 5xx ratio), `HighLatency` (p95 > 500ms), and `ServiceUnavailable` (no traffic for 5 minutes) — and pushes firing alerts to Alertmanager, which groups/deduplicates them and routes to a Slack channel via an Incoming Webhook. The webhook URL is a Kubernetes `Secret` created directly against the cluster (`kubectl create secret`), never committed to Git; `alertmanager.yml` only references it by mounted file path (`slack_configs[].api_url_file`).
+
+![Prometheus Alert Rules](screenshots/prometheus-alert-rules.png)
+
+All three rules loaded from `/etc/prometheus/rules.yml`, in their normal resting state.
+
+![Prometheus connected to Alertmanager](screenshots/prometheus-alertmanager-connected.png)
+
+Prometheus's own Status page confirming it has a live Alertmanager endpoint configured — proof the alert-push path exists, not just that rules are defined.
+
+![Slack Alert Notification](screenshots/slack-alert-notification.png)
+
+A real `HighLatency` alert, fired by Prometheus and delivered end-to-end through Alertmanager into Slack — resolution notification included, confirming both the firing and the resolving path work.
 
 ## Repository Structure
 
 | Repo | Contains | Role |
 |---|---|---|
 | `gitops-ci-pipeline` | FastAPI source, `Dockerfile`, `tests/`, `.github/workflows/ci.yml` | Owns app code and image build; never touches the cluster |
-| `gitops-kubernetes-config` (this repo) | `argocd/application.yaml`, `helm/gitops-demo/` (chart + templates), `environments/dev`, `environments/staging` | Owns desired cluster state; watched by ArgoCD |
+| `gitops-kubernetes-config` (this repo) | `argocd/application.yaml`, `helm/gitops-demo/` (chart + templates), `environments/dev`, `environments/staging`, `observability/` | Owns desired cluster state; watched by ArgoCD |
 
 This repo's layout:
 
 ```
 gitops-kubernetes-config/
-├── argocd/application.yaml
+├── argocd/
+│   ├── application.yaml
+│   ├── application-staging.yaml
+│   └── application-observability.yaml
 ├── environments/
 │   ├── dev/values-dev.yaml
 │   └── staging/values-staging.yaml
-└── helm/gitops-demo/
-    ├── Chart.yaml
-    ├── values.yaml
-    └── templates/{deployment.yaml, service.yaml}
+├── helm/gitops-demo/
+│   ├── Chart.yaml
+│   ├── values.yaml
+│   └── templates/{deployment.yaml, service.yaml}
+└── observability/
+    ├── otel-collector.yaml   # OTel Collector Deployment + spanmetrics config
+    ├── jaeger.yaml           # Jaeger + Prometheus-query env vars for the Monitor tab
+    ├── prometheus.yaml       # scrape config + alert rules (rules.yml)
+    ├── grafana.yaml          # datasource + dashboard provisioning
+    └── alertmanager.yaml     # Slack receiver (webhook URL via a Secret, not committed)
 ```
 
 ---
@@ -183,7 +216,7 @@ Reported but **not** independently backed by a file, log, or screenshot in eithe
 - No Ingress/TLS — `ClusterIP` only, cluster-internal
 - No Horizontal Pod Autoscaler; static replica counts
 - No NetworkPolicy or RBAC manifests
-- No monitoring/alerting wired in
+- Alertmanager only routes to Slack — no PagerDuty/email/on-call escalation
 - Local Kind cluster only — never run against a managed/cloud Kubernetes service
 - No production traffic, uptime, or performance claims
 
@@ -194,7 +227,7 @@ Reported but **not** independently backed by a file, log, or screenshot in eithe
 - Ingress + TLS, Horizontal Pod Autoscaler
 - NetworkPolicy + RBAC
 - ArgoCD notifications on sync failure/degraded health
-- OpenTelemetry Collector with a `spanmetrics` connector, to power Jaeger's Monitor (RED metrics) dashboard — distributed tracing (Jaeger) and metrics scraping (Prometheus) are already implemented and evidenced above; Grafana dashboards on top of Prometheus remain unbuilt
+- Alertmanager notification channels beyond Slack (e.g. PagerDuty, email) — Slack is wired and evidenced above
 
 ## Interview-Relevant Technical Decisions
 
