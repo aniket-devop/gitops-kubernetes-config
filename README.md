@@ -8,7 +8,7 @@ A FastAPI service that's tested, scanned, and published by GitHub Actions, then 
 
 I designed, built, and validated this GitOps pipeline end-to-end. It's split across two repositories on purpose: [`gitops-ci-pipeline`](https://github.com/aniket-devop/gitops-ci-pipeline) owns the application and CI, and [`gitops-kubernetes-config`](https://github.com/aniket-devop/gitops-kubernetes-config) (this repo) owns the desired cluster state that ArgoCD reconciles against.
 
-**Stack:** FastAPI · pytest · Docker (non-root, `python:3.12-alpine`) · Trivy · GHCR · Helm · ArgoCD · Kind.
+**Stack:** FastAPI · pytest · Docker (non-root, `python:3.12-alpine`) · Trivy · GHCR · Helm · ArgoCD · Kind · OpenTelemetry · Jaeger · Prometheus.
 
 This runs on a **local Kind cluster**, not a managed cloud environment. It's a hands-on demonstration of the GitOps pattern, and I'm not presenting it as production-ready — no production traffic, uptime, or scale claims are made anywhere below.
 
@@ -74,6 +74,26 @@ Local ArgoCD instance running at `127.0.0.1:8080` — confirms this is an actual
 `gitops-demo-dev` shown `Healthy` / `Synced`, reading `helm/gitops-demo` at `targetRevision: main`, deployed to namespace `gitops-demo-dev` (local ArgoCD UI).
 
 ---
+
+## Observability
+
+**Jaeger** (`jaegertracing/all-in-one`) runs in the `observability` namespace, receiving OTLP/HTTP traces from the app on port `4318`. It's managed by its own ArgoCD `Application` (`observability`), reading plain manifests from `observability/` in this repo — same automated `prune`/`selfHeal` policy as the app.
+
+**Evidence:**
+
+![Jaeger Traces](screenshots/jaeger-traces-list.png)
+
+Traces for `gitops-demo-app` in Jaeger's Search view — each `GET /health` request showing 3 spans and sub-5ms duration.
+
+![Jaeger Trace Detail](screenshots/jaeger-trace-detail.png)
+
+A single trace's span waterfall — the parent `SERVER` span and its two ASGI child spans, with exact per-span duration.
+
+**Prometheus** scrapes Jaeger's internal metrics endpoint (`14269`) every 15 seconds. Jaeger is configured with `METRICS_STORAGE_TYPE=prometheus` and `PROMETHEUS_SERVER_URL` pointing back at it, wiring up the data source for Jaeger's "Monitor" tab.
+
+**Why a separate namespace and `Application`:** keeping `observability` on its own ArgoCD `Application` means Jaeger and Prometheus reconcile independently of the app — a change to one doesn't trigger a sync of the other, and either can be deleted/recreated from Git without touching the application deployment.
+
+**Not yet implemented:** the Monitor tab's RED-metrics dashboard (per-operation latency, error rate, request rate) additionally needs an OpenTelemetry Collector with a `spanmetrics` connector sitting between the app and Jaeger, to convert spans into metrics — Jaeger doesn't generate these itself. The trace pipeline (Search tab) and the Prometheus scrape connection are both confirmed working; the Collector is a scoped follow-up, not yet built.
 
 ## Repository Structure
 
@@ -170,7 +190,7 @@ Reported but **not** independently backed by a file, log, or screenshot in eithe
 - Ingress + TLS, Horizontal Pod Autoscaler
 - NetworkPolicy + RBAC
 - ArgoCD notifications on sync failure/degraded health
-- Prometheus/Grafana monitoring
+- OpenTelemetry Collector with a `spanmetrics` connector, to power Jaeger's Monitor (RED metrics) dashboard — distributed tracing (Jaeger) and metrics scraping (Prometheus) are already implemented and evidenced above; Grafana dashboards on top of Prometheus remain unbuilt
 
 ## Interview-Relevant Technical Decisions
 
