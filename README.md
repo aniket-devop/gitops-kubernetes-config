@@ -1,11 +1,10 @@
-﻿# GitOps CI/CD Pipeline — FastAPI, ArgoCD, and Kind Kubernetes
+# GitOps CI/CD Pipeline — FastAPI, ArgoCD, and Kind Kubernetes
 
 ![CI](https://github.com/aniket-devop/gitops-ci-pipeline/actions/workflows/ci.yml/badge.svg)
-![ArgoCD](https://img.shields.io/badge/ArgoCD-Synced-brightgreen)
+![ArgoCD](https://img.shields.io/badge/ArgoCD-GitOps-EF7B4D?logo=argo&logoColor=white)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-Kind-blue)
-![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
-> **TL;DR:** Push to Git -> CI tests/scans/builds -> ArgoCD auto-deploys to Kubernetes -> OpenTelemetry traces + Prometheus metrics -> Grafana dashboards -> Slack alerts on failure. Zero manual `kubectl apply`.
+> **TL;DR:** Push to Git -> CI tests/scans/builds -> ArgoCD auto-deploys to Kubernetes -> OpenTelemetry traces + Prometheus metrics -> Grafana dashboards -> Slack alerts on failure. No manual `kubectl apply` for application deployments.
 
 A FastAPI service that's tested, scanned, and published by GitHub Actions, then deployed and reconciled by ArgoCD onto a local Kind cluster — with rollback done entirely through Git.
 
@@ -54,7 +53,7 @@ On every push to `main` in `gitops-ci-pipeline`, `.github/workflows/ci.yml` runs
 
 Steps 1–6 never touch this repository, and step 7 never touches Kubernetes — it only commits a changed value file.
 
-**Evidence:** the automated commits `aed4bb5`, `6d381aa`, `978b36d`, `b65229a` in this repo's history are all CI-generated tag bumps, and the current `dev` tag (`b65229a`) matches the latest commit SHA in `gitops-ci-pipeline`.
+**Evidence:** this repo's history contains CI-generated `Update dev image tag to <sha>` commits from `github-actions[bot]`, and the `dev` tag in `environments/dev/values-dev.yaml` tracks the latest commit SHA in `gitops-ci-pipeline`.
 
 **Why GHCR:** it's already authenticated through the existing `GITHUB_TOKEN`, so there's no separate registry account or credential set to manage, and the image lives next to the repo that builds it. That's a practical fit for this project's scope — not a claim that GHCR is inherently better than Docker Hub or a cloud registry.
 
@@ -66,9 +65,9 @@ Steps 1–6 never touch this repository, and step 7 never touches Kubernetes —
 
 **GitHub Actions does not deploy directly to Kubernetes.** It stops at committing an updated image tag to `gitops-kubernetes-config`. From there:
 
-`gitops-kubernetes-config (Git) ? ArgoCD (watches this repo) ? Kind cluster ? FastAPI Pods`
+`gitops-kubernetes-config (Git) → ArgoCD (watches this repo) → Kind cluster → FastAPI Pods`
 
-ArgoCD is the only component with cluster credentials. It runs with automated sync, `prune: true`, and `selfHeal: true` — so it syncs without manual approval, removes resources deleted from Git, and reverts any manual `kubectl` change made directly against the cluster back to what's in Git. Only the `dev` environment has an `Application` wired up.
+ArgoCD is the only component with cluster credentials. It runs with automated sync, `prune: true`, and `selfHeal: true` — so it syncs without manual approval, removes resources deleted from Git, and reverts any manual `kubectl` change made directly against the cluster back to what's in Git. `dev` and the `observability` stack are automated. `staging` also has an `Application`, but it requires a manual sync.
 
 **Evidence:**
 
@@ -116,7 +115,7 @@ Grafana (also GitOps-managed — datasource and dashboard are both provisioned f
 
 Jaeger's own "Monitor" tab, driven by the same Prometheus data — per-operation latency percentiles, error rate, and request rate, with no separate instrumentation beyond what the Collector already produces.
 
-**Alerting.** Prometheus evaluates three rules against the Collector's metrics — `HighErrorRate` (>5% 5xx ratio), `HighLatency` (p95 > 500ms), and `ServiceUnavailable` (no traffic for 5 minutes) — and pushes firing alerts to Alertmanager, which groups/deduplicates them and routes to a Slack channel via an Incoming Webhook. The webhook URL is a Kubernetes `Secret` created directly against the cluster (`kubectl create secret`), never committed to Git; `alertmanager.yml` only references it by mounted file path (`slack_configs[].api_url_file`).
+**Alerting.** Prometheus evaluates three rules against the Collector's metrics — `HighErrorRate` (>5% 5xx ratio), `HighLatency` (p95 > 500ms), and `ServiceUnavailable` (no request rate observed for 2 minutes) — and pushes firing alerts to Alertmanager, which groups/deduplicates them and routes to a Slack channel via an Incoming Webhook. The webhook URL is a Kubernetes `Secret` created directly against the cluster (`kubectl create secret`), never committed to Git; `alertmanager.yml` only references it by mounted file path (`slack_configs[].api_url_file`).
 
 ![Prometheus Alert Rules](screenshots/prometheus-alert-rules.png)
 
@@ -141,35 +140,35 @@ This repo's layout:
 
 ```
 gitops-kubernetes-config/
-+-- argocd/
-¦   +-- application.yaml
-¦   +-- application-staging.yaml
-¦   +-- application-observability.yaml
-+-- environments/
-¦   +-- dev/values-dev.yaml
-¦   +-- staging/values-staging.yaml
-+-- helm/gitops-demo/
-¦   +-- Chart.yaml
-¦   +-- values.yaml
-¦   +-- templates/{deployment.yaml, service.yaml}
-+-- observability/
-    +-- otel-collector.yaml   # OTel Collector Deployment + spanmetrics config
-    +-- jaeger.yaml           # Jaeger + Prometheus-query env vars for the Monitor tab
-    +-- prometheus.yaml       # scrape config + alert rules (rules.yml)
-    +-- grafana.yaml          # datasource + dashboard provisioning
-    +-- alertmanager.yaml     # Slack receiver (webhook URL via a Secret, not committed)
+├── argocd/
+│   ├── application.yaml
+│   ├── application-staging.yaml
+│   └── application-observability.yaml
+├── environments/
+│   ├── dev/values-dev.yaml
+│   └── staging/values-staging.yaml
+├── helm/gitops-demo/
+│   ├── Chart.yaml
+│   ├── values.yaml
+│   └── templates/{deployment.yaml, service.yaml}
+└── observability/
+    ├── otel-collector.yaml   # OTel Collector Deployment + spanmetrics config
+    ├── jaeger.yaml           # Jaeger + Prometheus-query env vars for the Monitor tab
+    ├── prometheus.yaml       # scrape config + alert rules (rules.yml)
+    ├── grafana.yaml          # datasource + dashboard provisioning
+    └── alertmanager.yaml     # Slack receiver (webhook URL via a Secret, not committed)
 ```
 
 ---
 
 ## Helm Configuration
 
-Chart `gitops-demo`, v0.2.0, appVersion `1.0.0`. Base `values.yaml` sets 3 replicas, a `ClusterIP` service (port 80 ? container 8000), resource requests/limits, and liveness/readiness probes on `/health`.
+Chart `gitops-demo`, v0.2.0, appVersion `2.0.0`. Base `values.yaml` sets 3 replicas, a `ClusterIP` service (port 80 → container 8000), resource requests/limits, and liveness/readiness probes on `/health`.
 
 | | Base | `dev` | `staging` |
 |---|---|---|---|
 | `replicaCount` | 3 | 1 | 2 |
-| `image.tag` | `local` | `b65229a` (CI-managed) | `initial` (static, not CI-managed) |
+| `image.tag` | `local` | CI-managed (short commit SHA) | `initial` (static, not CI-managed) |
 
 Environment files only override `replicaCount` and `image` — probes and resources are inherited unchanged from the base chart. **Staging has an ArgoCD `Application`, but it's not automated** — there's no `prune`/`selfHeal`, so it requires a manual sync rather than deploying on its own.
 
@@ -183,11 +182,12 @@ Environment files only override `replicaCount` and `image` — probes and resour
 What's actually implemented:
 
 - **Trivy CRITICAL gate** — hard fail (`exit-code: "1"`) before an image can reach GHCR
-- **Non-root container** — Dockerfile creates and switches to `appuser` before the app runs
-- **No hardcoded credentials** — GHCR auth via `GITHUB_TOKEN`, cross-repo commits via a separately scoped `GITOPS_REPO_TOKEN`
+- **Non-root container** — Dockerfile creates and switches to an unprivileged user (UID 10001) before the app runs
+- **Pod security context** — `runAsNonRoot`, `allowPrivilegeEscalation: false`, all capabilities dropped, and `readOnlyRootFilesystem: true` (`helm/gitops-demo/templates/deployment.yaml`)
+- **No hardcoded credentials** — GHCR auth via `GITHUB_TOKEN`, cross-repo commits via a separately scoped token stored as a repository secret
 - **Drift correction** — `selfHeal: true` reverts undocumented manual cluster changes
 
-Not implemented: NetworkPolicy, RBAC, Pod security contexts beyond the non-root user, image signing. This is not an enterprise-hardened setup — the goal was to get the highest-value controls (a scanning gate and an unprivileged runtime user) right, not to cover every hardening dimension.
+Not implemented: NetworkPolicy, RBAC manifests, image signing. This is not an enterprise-hardened setup — the goal was to get the highest-value controls (a scanning gate, an unprivileged runtime user and a restrictive pod security context) right, not to cover every hardening dimension.
 
 ---
 
@@ -209,7 +209,7 @@ This matters more than it might look at first glance: it means there's no separa
 Backed by a screenshot, commit, or file in one of the two repos:
 
 - ArgoCD `gitops-demo-dev` shown `Healthy` / `Synced` (screenshot)
-- `kubectl scale deployment gitops-demo --replicas=5 -n gitops-demo-dev` — Pods observed `ContainerCreating` ? `Running`, excess Pods `Terminating` (screenshot)
+- `kubectl scale deployment gitops-demo --replicas=5 -n gitops-demo-dev` — Pods observed `ContainerCreating` → `Running`, excess Pods `Terminating` (screenshot)
 - Git revert `9f75968` reverting `57e6a90`, confirmed in this repo's commit history
 - CI-generated tag-bump commits, current `dev` tag matching the app repo's latest commit
 
