@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/aniket-devop/gitops-demo
-  tag: f6dd78c
+  tag: 58685ba
 
 service:
   port: 80
